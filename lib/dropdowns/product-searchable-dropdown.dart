@@ -22,17 +22,18 @@ class ProductSearchableDropdown extends StatefulWidget {
   final InputDecoration? decoration;
   final List<String> types;
 
-  const ProductSearchableDropdown(
-      {super.key,
-      required this.onChanged,
-      this.initialValue,
-      this.allowQuickCreate = true,
-      this.label = 'Select Product',
-      this.hintText,
-      this.readOnly = false,
-      this.allowClear = true,
-      this.decoration,
-      required this.types});
+  const ProductSearchableDropdown({
+    super.key,
+    required this.onChanged,
+    this.initialValue,
+    this.allowQuickCreate = true,
+    this.label = 'Select Product',
+    this.hintText,
+    this.readOnly = false,
+    this.allowClear = true,
+    this.decoration,
+    required this.types,
+  });
 
   @override
   State<ProductSearchableDropdown> createState() =>
@@ -75,34 +76,35 @@ class _ProductSearchableDropdownState extends State<ProductSearchableDropdown> {
 
   @override
   Widget build(BuildContext context) {
-    final deco = (widget.decoration ??
-            InputDecoration(
-              labelText: widget.label,
-              hintText: widget.hintText ?? 'Tap to search products',
-              border: const OutlineInputBorder(),
-              prefixIcon: const Icon(Icons.shopping_bag_outlined),
-            ))
-        .copyWith(
-      suffixIcon: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          if (_selected != null && widget.allowClear)
-            IconButton(
-              tooltip: 'Clear',
-              icon: const Icon(Icons.clear),
-              onPressed: () {
-                setState(() => _selected = null);
-                widget.onChanged(null);
-              },
-            ),
-          IconButton(
-            tooltip: 'Search',
-            icon: const Icon(Icons.search),
-            onPressed: widget.readOnly ? null : _openPicker,
-          ),
-        ],
-      ),
-    );
+    final deco =
+        (widget.decoration ??
+                InputDecoration(
+                  labelText: widget.label,
+                  hintText: widget.hintText ?? 'Tap to search products',
+                  border: const OutlineInputBorder(),
+                  prefixIcon: const Icon(Icons.shopping_bag_outlined),
+                ))
+            .copyWith(
+              suffixIcon: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (_selected != null && widget.allowClear)
+                    IconButton(
+                      tooltip: 'Clear',
+                      icon: const Icon(Icons.clear),
+                      onPressed: () {
+                        setState(() => _selected = null);
+                        widget.onChanged(null);
+                      },
+                    ),
+                  IconButton(
+                    tooltip: 'Search',
+                    icon: const Icon(Icons.search),
+                    onPressed: widget.readOnly ? null : _openPicker,
+                  ),
+                ],
+              ),
+            );
 
     final text = _selected == null
         ? ''
@@ -125,8 +127,10 @@ class _ProductSearchableDropdownState extends State<ProductSearchableDropdown> {
 class _ProductPickerSheet extends StatefulWidget {
   final bool allowQuickCreate;
   final List<String> types;
-  const _ProductPickerSheet(
-      {required this.allowQuickCreate, required this.types});
+  const _ProductPickerSheet({
+    required this.allowQuickCreate,
+    required this.types,
+  });
 
   @override
   State<_ProductPickerSheet> createState() => _ProductPickerSheetState();
@@ -161,7 +165,9 @@ class _ProductPickerSheetState extends State<_ProductPickerSheet> {
   void _onQueryChanged() {
     _debounce?.cancel();
     _debounce = Timer(const Duration(milliseconds: 250), () {
-      _runSearch(_queryCtrl.text.trim());
+      if (_queryCtrl.text.isNotEmpty) {
+        _runSearch(_queryCtrl.text.trim());
+      }
     });
   }
 
@@ -209,9 +215,9 @@ class _ProductPickerSheetState extends State<_ProductPickerSheet> {
     } catch (e) {
       if (!mounted || myToken != _token) return;
       setState(() => _results = const []);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Search failed: $e')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Search failed: $e')));
     } finally {
       if (mounted && myToken == _token) setState(() => _loading = false);
     }
@@ -221,9 +227,11 @@ class _ProductPickerSheetState extends State<_ProductPickerSheet> {
     if (!widget.allowQuickCreate) return false;
     final q = _lastQuery.trim();
     if (q.isEmpty) return false;
-    return !_results.any((e) =>
-        e.description.toLowerCase() == q.toLowerCase() ||
-        e.code.toLowerCase() == q.toLowerCase());
+    return !_results.any(
+      (e) =>
+          e.description.toLowerCase() == q.toLowerCase() ||
+          e.code.toLowerCase() == q.toLowerCase(),
+    );
   }
 
   Future<void> _openQuickCreate(String initialName) async {
@@ -255,11 +263,13 @@ class _ProductPickerSheetState extends State<_ProductPickerSheet> {
             children: [
               const SizedBox(height: 8),
               Container(
-                  width: 44,
-                  height: 4,
-                  decoration: BoxDecoration(
-                      color: Colors.black12,
-                      borderRadius: BorderRadius.circular(2))),
+                width: 44,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: Colors.black12,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
               const SizedBox(height: 8),
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 6, 16, 10),
@@ -303,7 +313,7 @@ class _ProductPickerSheetState extends State<_ProductPickerSheet> {
                               query: _lastQuery,
                               onTap: () {
                                 createProduct(_lastQuery);
-                              }
+                              },
                             );
                           }
                           final opt = _results[i - (_canOfferCreate ? 1 : 0)];
@@ -324,13 +334,12 @@ class _ProductPickerSheetState extends State<_ProductPickerSheet> {
   }
 
   Future<void> createProduct(String query) async {
-
     final payload = <String, dynamic>{
       "description": query,
       "type": 'CONSUMABLE',
       "category": 'CONSUMABLE',
       "autoGenerateCode": 'X',
-      "baseUnitOfMeasure":'EA'
+      "baseUnitOfMeasure": 'EA',
     };
 
     setState(() => _saving = true);
@@ -340,8 +349,9 @@ class _ProductPickerSheetState extends State<_ProductPickerSheet> {
       Navigator.pop(context, created);
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('Create failed: $e')));
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Create failed: $e')));
     } finally {
       if (mounted) setState(() => _saving = false);
     }
@@ -417,16 +427,17 @@ class _QuickCreateProductSheetState extends State<_QuickCreateProductSheet> {
           id: (resp['productId'] ?? resp['id'] ?? resp['code'] ?? '')
               .toString(),
           code: (resp['code'] ?? '').toString(),
-          description:
-              (resp['description'] ?? payload['description']).toString(),
+          description: (resp['description'] ?? payload['description'])
+              .toString(),
         );
       } else {
         created = Product(
           id: (payload['code'] as String).isEmpty
               ? DateTime.now().millisecondsSinceEpoch.toString()
               : payload['code'],
-          code:
-              (payload['code'] as String).isEmpty ? '(auto)' : payload['code'],
+          code: (payload['code'] as String).isEmpty
+              ? '(auto)'
+              : payload['code'],
           description: payload['description'],
         );
       }
@@ -434,8 +445,9 @@ class _QuickCreateProductSheetState extends State<_QuickCreateProductSheet> {
       Navigator.pop(context, created);
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('Create failed: $e')));
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Create failed: $e')));
     } finally {
       if (mounted) setState(() => _saving = false);
     }
@@ -461,21 +473,27 @@ class _QuickCreateProductSheetState extends State<_QuickCreateProductSheet> {
                   children: [
                     const Icon(Icons.add_box_outlined),
                     const SizedBox(width: 8),
-                    const Text('Quick Create Product',
-                        style: TextStyle(
-                            fontSize: 16, fontWeight: FontWeight.w700)),
+                    const Text(
+                      'Quick Create Product',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
                     const Spacer(),
                     IconButton(
-                        onPressed:
-                            _saving ? null : () => Navigator.pop(context),
-                        icon: const Icon(Icons.close)),
+                      onPressed: _saving ? null : () => Navigator.pop(context),
+                      icon: const Icon(Icons.close),
+                    ),
                   ],
                 ),
                 const SizedBox(height: 8),
                 TextFormField(
                   controller: _descCtrl,
                   decoration: const InputDecoration(
-                      labelText: 'Description *', border: OutlineInputBorder()),
+                    labelText: 'Description *',
+                    border: OutlineInputBorder(),
+                  ),
                   validator: (v) =>
                       (v == null || v.trim().isEmpty) ? 'Required' : null,
                 ),
@@ -483,8 +501,9 @@ class _QuickCreateProductSheetState extends State<_QuickCreateProductSheet> {
                 Row(
                   children: [
                     Switch(
-                        value: _autoGen,
-                        onChanged: (v) => setState(() => _autoGen = v)),
+                      value: _autoGen,
+                      onChanged: (v) => setState(() => _autoGen = v),
+                    ),
                     const SizedBox(width: 8),
                     const Text('Auto-generate code'),
                   ],
@@ -494,12 +513,14 @@ class _QuickCreateProductSheetState extends State<_QuickCreateProductSheet> {
                   controller: _codeCtrl,
                   enabled: !_autoGen,
                   decoration: const InputDecoration(
-                      labelText: 'Code', border: OutlineInputBorder()),
+                    labelText: 'Code',
+                    border: OutlineInputBorder(),
+                  ),
                   validator: (_) => _autoGen
                       ? null
                       : (_codeCtrl.text.trim().isEmpty
-                          ? 'Code required or enable auto-generate'
-                          : null),
+                            ? 'Code required or enable auto-generate'
+                            : null),
                 ),
                 // const SizedBox(height: 10),
                 // Row(
@@ -544,7 +565,10 @@ class _QuickCreateProductSheetState extends State<_QuickCreateProductSheet> {
                           width: 18,
                           height: 18,
                           child: CircularProgressIndicator(
-                              strokeWidth: 2, color: Colors.white))
+                            strokeWidth: 2,
+                            color: Colors.white,
+                          ),
+                        )
                       : const Icon(Icons.save),
                   label: const Text('Create'),
                 ),
@@ -572,8 +596,9 @@ class _CreateTile extends StatelessWidget {
           children: [
             const TextSpan(text: 'Create '),
             TextSpan(
-                text: '“$query”',
-                style: const TextStyle(decoration: TextDecoration.underline)),
+              text: '“$query”',
+              style: const TextStyle(decoration: TextDecoration.underline),
+            ),
             const TextSpan(text: ' as a new product'),
           ],
         ),

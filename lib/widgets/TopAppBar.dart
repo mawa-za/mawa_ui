@@ -113,7 +113,7 @@ class _TopAppBarState extends State<TopAppBar> {
   Widget build(BuildContext context) {
     final isMobile = !kIsWeb && (Theme.of(context).platform == TargetPlatform.android || Theme.of(context).platform == TargetPlatform.iOS);
     final showTenant = _tenant != null && _tenant!.trim().isNotEmpty && _tenant != '-';
-
+    final cs = Theme.of(context).colorScheme;
     return AppBar(
       backgroundColor: widget.backgroundColor ?? Theme.of(context).colorScheme.surface,
       elevation: widget.elevation,
@@ -132,7 +132,7 @@ class _TopAppBarState extends State<TopAppBar> {
               widget.title,
               overflow: TextOverflow.ellipsis,
               style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                fontWeight: FontWeight.w700,
+                fontWeight: FontWeight.w500,
               ),
             ),
           ),

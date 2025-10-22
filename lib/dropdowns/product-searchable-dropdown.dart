@@ -1,12 +1,11 @@
-/// product_searchable_dropdown.dart
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:mawa_api/mawa_api.dart';
 
 /// A reusable searchable dropdown specialized for Products.
-/// - Built-in API search via ProductService().search(query)
-/// - Built-in quick-create via ProductService().post(payload)
-/// - Returns the selected (or newly created) Product via onChanged
+/// - One-shot API fetch (cached) then local, debounced filtering
+/// - Optional quick-create if nothing matches
+/// - Emits the selected (or newly created) Product via onChanged
 class ProductSearchableDropdown extends StatefulWidget {
   final void Function(Product? value) onChanged;
   final Product? initialValue;
@@ -20,6 +19,8 @@ class ProductSearchableDropdown extends StatefulWidget {
   final bool readOnly;
   final bool allowClear;
   final InputDecoration? decoration;
+
+  /// Optional product types filter you want to pass to your API
   final List<String> types;
 
   const ProductSearchableDropdown({
@@ -64,8 +65,8 @@ class _ProductSearchableDropdownState extends State<ProductSearchableDropdown> {
       isScrollControlled: true,
       useSafeArea: true,
       builder: (_) => _ProductPickerSheet(
-        allowQuickCreate: widget.allowQuickCreate,
         types: widget.types,
+        allowQuickCreate: widget.allowQuickCreate,
       ),
     );
     if (picked != null) {
@@ -76,35 +77,34 @@ class _ProductSearchableDropdownState extends State<ProductSearchableDropdown> {
 
   @override
   Widget build(BuildContext context) {
-    final deco =
-        (widget.decoration ??
-                InputDecoration(
-                  labelText: widget.label,
-                  hintText: widget.hintText ?? 'Tap to search products',
-                  border: const OutlineInputBorder(),
-                  prefixIcon: const Icon(Icons.shopping_bag_outlined),
-                ))
-            .copyWith(
-              suffixIcon: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  if (_selected != null && widget.allowClear)
-                    IconButton(
-                      tooltip: 'Clear',
-                      icon: const Icon(Icons.clear),
-                      onPressed: () {
-                        setState(() => _selected = null);
-                        widget.onChanged(null);
-                      },
-                    ),
-                  IconButton(
-                    tooltip: 'Search',
-                    icon: const Icon(Icons.search),
-                    onPressed: widget.readOnly ? null : _openPicker,
-                  ),
-                ],
-              ),
-            );
+    final deco = (widget.decoration ??
+        InputDecoration(
+          labelText: widget.label,
+          hintText: widget.hintText ?? 'Tap to search products',
+          border: const OutlineInputBorder(),
+          prefixIcon: const Icon(Icons.shopping_bag_outlined),
+        ))
+        .copyWith(
+      suffixIcon: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (_selected != null && widget.allowClear)
+            IconButton(
+              tooltip: 'Clear',
+              icon: const Icon(Icons.clear),
+              onPressed: () {
+                setState(() => _selected = null);
+                widget.onChanged(null);
+              },
+            ),
+          IconButton(
+            tooltip: 'Search',
+            icon: const Icon(Icons.search),
+            onPressed: widget.readOnly ? null : _openPicker,
+          ),
+        ],
+      ),
+    );
 
     final text = _selected == null
         ? ''
@@ -123,7 +123,8 @@ class _ProductSearchableDropdownState extends State<ProductSearchableDropdown> {
   }
 }
 
-/// Bottom-sheet picker with API search + “Quick Create”.
+/* ========================= Picker Sheet ========================= */
+
 class _ProductPickerSheet extends StatefulWidget {
   final bool allowQuickCreate;
   final List<String> types;
@@ -140,18 +141,22 @@ class _ProductPickerSheetState extends State<_ProductPickerSheet> {
   final TextEditingController _queryCtrl = TextEditingController();
   final FocusNode _focus = FocusNode();
   Timer? _debounce;
+
   bool _loading = false;
-  String _lastQuery = '';
-  int _token = 0;
-  List<Product> _results = const [];
   bool _saving = false;
+  String _lastQuery = '';
+  List<Product> _results = const [];
+
+  // ---- Simple in-memory cache per types signature ----
+  static final Map<String, List<Product>> _cacheByTypes = {};
+  String get _cacheKey => widget.types.join('|');
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) => _focus.requestFocus());
     _queryCtrl.addListener(_onQueryChanged);
-    _runSearch('');
+    _initData();
   }
 
   @override
@@ -162,90 +167,96 @@ class _ProductPickerSheetState extends State<_ProductPickerSheet> {
     super.dispose();
   }
 
-  void _onQueryChanged() {
-    _debounce?.cancel();
-    _debounce = Timer(const Duration(milliseconds: 250), () {
-      if (_queryCtrl.text.isNotEmpty) {
-        _runSearch(_queryCtrl.text.trim());
-      }
-    });
+  Future<void> _initData() async {
+    // If cached, use it; otherwise fetch once.
+    final cached = _cacheByTypes[_cacheKey];
+    if (cached != null) {
+      setState(() {
+        _results = cached;
+        _lastQuery = '';
+      });
+      return;
+    }
+    await _loadAllProducts();
   }
 
-  Future<void> _runSearch(String q) async {
-    final myToken = ++_token;
+  Future<void> _loadAllProducts() async {
     setState(() {
       _loading = true;
-      _lastQuery = q;
+      _lastQuery = '';
+      _results = const [];
     });
-    try {
-      // --- API call (adjust if your mawa_api differs) ---
-      final svc = ProductService();
-      // Prefer a dedicated search; fall back to getAll with filter-like behavior if needed.
-      dynamic raw;
-      try {
-        raw = await svc.getAll(widget.types); //
-        if (q.isNotEmpty && raw is List) {
-          raw = raw.where((p) {
-            final needle = q.toLowerCase();
-            return p.description.toLowerCase().contains(needle);
-          }).toList();
-        } // recommended
-      } catch (_) {
-        raw = await svc.getAll(widget.types); // fallback
-        if (q.isNotEmpty && raw is List) {
-          raw = raw.where((p) {
-            final code = (p['code'] ?? '').toString().toLowerCase();
-            final desc = (p['description'] ?? '').toString().toLowerCase();
-            final needle = q.toLowerCase();
-            return code.contains(needle) || desc.contains(needle);
-          }).toList();
-        }
-      }
 
-      final list = <Product>[];
-      if (raw is List) {
+    try {
+      final svc = ProductService();
+      dynamic raw = await svc.getAll(widget.types);
+
+      List<Product> all = const [];
+
+      if (raw is List<Product>) {
+        all = raw;
+      } else if (raw is List) {
+        final list = <Product>[];
         for (final p in raw) {
           try {
-            list.add(p);
+            if (p is Product) {
+              list.add(p);
+            } else if (p is Map) {
+              list.add(Product(
+                id: (p['productId'] ?? p['id'] ?? p['code'] ?? '').toString(),
+                code: (p['code'] ?? '').toString(),
+                description: (p['description'] ?? '').toString(),
+              ));
+            }
           } catch (_) {}
         }
+        all = list;
       }
-      if (!mounted || myToken != _token) return;
-      setState(() => _results = list);
+
+      _cacheByTypes[_cacheKey] = all;
+      setState(() => _results = all);
     } catch (e) {
-      if (!mounted || myToken != _token) return;
-      setState(() => _results = const []);
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Search failed: $e')));
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('Load products failed: $e')));
+      }
     } finally {
-      if (mounted && myToken == _token) setState(() => _loading = false);
+      if (mounted) setState(() => _loading = false);
     }
+  }
+
+  void _onQueryChanged() {
+    _debounce?.cancel();
+    _debounce = Timer(const Duration(milliseconds: 200), () {
+      final q = _queryCtrl.text.trim();
+      _lastQuery = q;
+
+      final all = _cacheByTypes[_cacheKey] ?? const <Product>[];
+      if (q.isEmpty) {
+        setState(() => _results = all);
+        return;
+      }
+      final needle = q.toLowerCase();
+      setState(() {
+        _results = all.where((p) {
+          final code = p.code.toLowerCase();
+          final desc = p.description.toLowerCase();
+          return code.contains(needle) || desc.contains(needle);
+        }).toList();
+      });
+    });
   }
 
   bool get _canOfferCreate {
     if (!widget.allowQuickCreate) return false;
     final q = _lastQuery.trim();
     if (q.isEmpty) return false;
-    return !_results.any(
-      (e) =>
-          e.description.toLowerCase() == q.toLowerCase() ||
-          e.code.toLowerCase() == q.toLowerCase(),
-    );
+    return !_results.any((e) =>
+    e.description.toLowerCase() == q.toLowerCase() ||
+        e.code.toLowerCase() == q.toLowerCase());
   }
 
-  Future<void> _openQuickCreate(String initialName) async {
-    // final created = await showModalBottomSheet<Product>(
-    //   context: context,
-    //   isScrollControlled: true,
-    //   useSafeArea: true,
-    //   builder: (_) => const _QuickCreateProductSheet(),
-    // );
-    // if (created != null && mounted) {
-    //   Navigator.pop(context, created); // return the new product
-    // }
-    createProduct(initialName);
-  }
+  Future<void> _createFromQuery(String q) async => _createProduct(q);
 
   @override
   Widget build(BuildContext context) {
@@ -271,60 +282,76 @@ class _ProductPickerSheetState extends State<_ProductPickerSheet> {
                 ),
               ),
               const SizedBox(height: 8),
+
+              // Search row with refresh
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 6, 16, 10),
-                child: TextField(
-                  focusNode: _focus,
-                  controller: _queryCtrl,
-                  textInputAction: TextInputAction.search,
-                  onSubmitted: (q) {
-                    if (_canOfferCreate) _openQuickCreate(q);
-                  },
-                  decoration: InputDecoration(
-                    labelText: 'Search product',
-                    prefixIcon: const Icon(Icons.search),
-                    suffixIcon: _queryCtrl.text.isEmpty
-                        ? null
-                        : IconButton(
-                            icon: const Icon(Icons.clear),
-                            onPressed: () {
-                              _queryCtrl.clear();
-                              _runSearch('');
-                            },
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        focusNode: _focus,
+                        controller: _queryCtrl,
+                        textInputAction: TextInputAction.search,
+                        onSubmitted: (q) {
+                          if (_canOfferCreate) _createFromQuery(q);
+                        },
+                        decoration: InputDecoration(
+                          labelText: 'Search product',
+                          prefixIcon: const Icon(Icons.search),
+                          border: const OutlineInputBorder(),
+                          suffixIcon: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              if (_queryCtrl.text.isNotEmpty)
+                                IconButton(
+                                  icon: const Icon(Icons.clear),
+                                  onPressed: () {
+                                    _queryCtrl.clear(); // listener resets to all
+                                  },
+                                ),
+                              IconButton(
+                                tooltip: 'Refresh from server',
+                                icon: const Icon(Icons.refresh),
+                                onPressed: _loading ? null : _loadAllProducts,
+                              ),
+                            ],
                           ),
-                    border: const OutlineInputBorder(),
-                  ),
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
               ),
+
               if (_loading) const LinearProgressIndicator(minHeight: 2),
+
               Expanded(
                 child: _results.isEmpty
                     ? _EmptyState(
-                        query: _lastQuery,
-                        onCreate: _canOfferCreate ? _openQuickCreate : null,
-                      )
+                  query: _lastQuery,
+                  onCreate: _canOfferCreate ? _createFromQuery : null,
+                )
                     : ListView.separated(
-                        padding: const EdgeInsets.only(bottom: 12),
-                        itemCount: _results.length + (_canOfferCreate ? 1 : 0),
-                        separatorBuilder: (_, __) => const Divider(height: 0),
-                        itemBuilder: (_, i) {
-                          if (_canOfferCreate && i == 0) {
-                            return _CreateTile(
-                              query: _lastQuery,
-                              onTap: () {
-                                createProduct(_lastQuery);
-                              },
-                            );
-                          }
-                          final opt = _results[i - (_canOfferCreate ? 1 : 0)];
-                          return ListTile(
-                            title: Text(opt.description),
-                            subtitle: Text(opt.code),
-                            leading: const Icon(Icons.inventory_2_outlined),
-                            onTap: () => Navigator.pop(context, opt),
-                          );
-                        },
-                      ),
+                  padding: const EdgeInsets.only(bottom: 12),
+                  itemCount: _results.length + (_canOfferCreate ? 1 : 0),
+                  separatorBuilder: (_, __) => const Divider(height: 0),
+                  itemBuilder: (_, i) {
+                    if (_canOfferCreate && i == 0) {
+                      return _CreateTile(
+                        query: _lastQuery,
+                        onTap: () => _createFromQuery(_lastQuery),
+                      );
+                    }
+                    final opt = _results[i - (_canOfferCreate ? 1 : 0)];
+                    return ListTile(
+                      leading: const Icon(Icons.inventory_2_outlined),
+                      title: Text(opt.description),
+                      subtitle: Text(opt.code),
+                      onTap: () => Navigator.pop(context, opt),
+                    );
+                  },
+                ),
               ),
             ],
           ),
@@ -333,7 +360,7 @@ class _ProductPickerSheetState extends State<_ProductPickerSheet> {
     );
   }
 
-  Future<void> createProduct(String query) async {
+  Future<void> _createProduct(String query) async {
     final payload = <String, dynamic>{
       "description": query,
       "type": 'CONSUMABLE',
@@ -344,242 +371,27 @@ class _ProductPickerSheetState extends State<_ProductPickerSheet> {
 
     setState(() => _saving = true);
     try {
-      Product created = await ProductService().post(payload);
-      if (!mounted) return;
-      Navigator.pop(context, created);
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Create failed: $e')));
-    } finally {
-      if (mounted) setState(() => _saving = false);
-    }
-  }
-}
+      final created = await ProductService().post(payload);
 
-/// Inline “Quick Create Product” sheet that POSTs your payload:
-/// {
-///   "code": "string",
-///   "description": "string",
-///   "type": "string",
-///   "category": "string",
-///   "baseUnitOfMeasure": "string",
-///   "price": 0,
-///   "pricingType": "string",
-///   "autoGenerateCode": "string"
-/// }
-class _QuickCreateProductSheet extends StatefulWidget {
-  const _QuickCreateProductSheet();
-
-  @override
-  State<_QuickCreateProductSheet> createState() =>
-      _QuickCreateProductSheetState();
-}
-
-class _QuickCreateProductSheetState extends State<_QuickCreateProductSheet> {
-  final _formKey = GlobalKey<FormState>();
-
-  final _descCtrl = TextEditingController();
-  final _codeCtrl = TextEditingController();
-  final _typeCtrl = TextEditingController(text: 'CONSUMABLE');
-  final _categoryCtrl = TextEditingController(text: 'CONSUMABLE');
-  final _uomCtrl = TextEditingController(text: 'EA');
-  final _priceCtrl = TextEditingController(text: '0');
-  final _pricingTypeCtrl = TextEditingController(text: 'STANDARD');
-
-  bool _autoGen = true;
-  bool _saving = false;
-
-  @override
-  void dispose() {
-    _descCtrl.dispose();
-    _codeCtrl.dispose();
-    _typeCtrl.dispose();
-    _categoryCtrl.dispose();
-    _uomCtrl.dispose();
-    _priceCtrl.dispose();
-    _pricingTypeCtrl.dispose();
-    super.dispose();
-  }
-
-  Future<void> _submit() async {
-    if (!_formKey.currentState!.validate()) return;
-
-    final price = double.tryParse(_priceCtrl.text.trim()) ?? 0.0;
-
-    final payload = <String, dynamic>{
-      "code": _autoGen ? "" : _codeCtrl.text.trim(),
-      "description": _descCtrl.text.trim(),
-      "type": _typeCtrl.text.trim(),
-      "category": _categoryCtrl.text.trim(),
-      "autoGenerateCode": _autoGen ? "1" : "0",
-    };
-
-    setState(() => _saving = true);
-    try {
-      // --- API call (adjust to your mawa_api ProductService) ---
-      final resp = await ProductService().post(payload);
-      // Map response -> Product
-      Product created;
-      if (resp is Map) {
-        created = Product(
-          id: (resp['productId'] ?? resp['id'] ?? resp['code'] ?? '')
-              .toString(),
-          code: (resp['code'] ?? '').toString(),
-          description: (resp['description'] ?? payload['description'])
-              .toString(),
-        );
-      } else {
-        created = Product(
-          id: (payload['code'] as String).isEmpty
-              ? DateTime.now().millisecondsSinceEpoch.toString()
-              : payload['code'],
-          code: (payload['code'] as String).isEmpty
-              ? '(auto)'
-              : payload['code'],
-          description: payload['description'],
-        );
+      // If Product returned, add to cache for this types-set
+      if (created is Product) {
+        final all = List<Product>.from(_cacheByTypes[_cacheKey] ?? const []);
+        all.insert(0, created);
+        _cacheByTypes[_cacheKey] = all;
       }
       if (!mounted) return;
-      Navigator.pop(context, created);
+      Navigator.pop(context, created is Product ? created : null);
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Create failed: $e')));
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('Create failed: $e')));
     } finally {
       if (mounted) setState(() => _saving = false);
     }
   }
-
-  @override
-  Widget build(BuildContext context) {
-    final inset = MediaQuery.of(context).viewInsets.bottom;
-
-    return AnimatedPadding(
-      duration: const Duration(milliseconds: 150),
-      padding: EdgeInsets.only(bottom: inset),
-      child: SafeArea(
-        top: false,
-        child: Material(
-          borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
-          child: Form(
-            key: _formKey,
-            child: ListView(
-              padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
-              children: [
-                Row(
-                  children: [
-                    const Icon(Icons.add_box_outlined),
-                    const SizedBox(width: 8),
-                    const Text(
-                      'Quick Create Product',
-                      style: TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                    const Spacer(),
-                    IconButton(
-                      onPressed: _saving ? null : () => Navigator.pop(context),
-                      icon: const Icon(Icons.close),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 8),
-                TextFormField(
-                  controller: _descCtrl,
-                  decoration: const InputDecoration(
-                    labelText: 'Description *',
-                    border: OutlineInputBorder(),
-                  ),
-                  validator: (v) =>
-                      (v == null || v.trim().isEmpty) ? 'Required' : null,
-                ),
-                const SizedBox(height: 10),
-                Row(
-                  children: [
-                    Switch(
-                      value: _autoGen,
-                      onChanged: (v) => setState(() => _autoGen = v),
-                    ),
-                    const SizedBox(width: 8),
-                    const Text('Auto-generate code'),
-                  ],
-                ),
-                const SizedBox(height: 6),
-                TextFormField(
-                  controller: _codeCtrl,
-                  enabled: !_autoGen,
-                  decoration: const InputDecoration(
-                    labelText: 'Code',
-                    border: OutlineInputBorder(),
-                  ),
-                  validator: (_) => _autoGen
-                      ? null
-                      : (_codeCtrl.text.trim().isEmpty
-                            ? 'Code required or enable auto-generate'
-                            : null),
-                ),
-                // const SizedBox(height: 10),
-                // Row(
-                //   children: [
-                //     Expanded(
-                //       child: TextFormField(
-                //         controller: _typeCtrl,
-                //         decoration: const InputDecoration(
-                //             labelText: 'Type', border: OutlineInputBorder()),
-                //       ),
-                //     ),
-                //     Expanded(
-                //       child: SearchableDropdown(
-                //           field: 'PRODUCT-TYPE',
-                //           label: 'Product Type',
-                //           initialCode: '',
-                //           onChanged: (p) {}),
-                //     ),
-                //     const SizedBox(width: 10),
-                //     Expanded(
-                //       child: SearchableDropdown(
-                //           field: 'PRODUCT-CATEGORY',
-                //           label: 'Product Category',
-                //           initialCode: '',
-                //           onChanged: (p) {}),
-                //     ),
-                //     Expanded(
-                //       child: TextFormField(
-                //         controller: _categoryCtrl,
-                //         decoration: const InputDecoration(
-                //             labelText: 'Category',
-                //             border: OutlineInputBorder()),
-                //       ),
-                //     ),
-                //   ],
-                // ),
-                const SizedBox(height: 14),
-                FilledButton.icon(
-                  onPressed: _saving ? null : _submit,
-                  icon: _saving
-                      ? const SizedBox(
-                          width: 18,
-                          height: 18,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            color: Colors.white,
-                          ),
-                        )
-                      : const Icon(Icons.save),
-                  label: const Text('Create'),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
 }
+
+/* ====================== Small UI helpers ====================== */
 
 class _CreateTile extends StatelessWidget {
   final String query;

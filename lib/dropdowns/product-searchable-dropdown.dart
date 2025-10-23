@@ -3,24 +3,20 @@ import 'package:flutter/material.dart';
 import 'package:mawa_api/mawa_api.dart';
 
 /// A reusable searchable dropdown specialized for Products.
-/// - One-shot API fetch (cached) then local, debounced filtering
-/// - Optional quick-create if nothing matches
-/// - Emits the selected (or newly created) Product via onChanged
+/// - First query (>=3 chars) triggers a one-time API fetch (per `types`), cached.
+/// - Subsequent queries are local, debounced filtering on the cached list.
+/// - Optional quick-create if nothing matches.
+/// - Emits the selected (or newly created) Product via onChanged.
 class ProductSearchableDropdown extends StatefulWidget {
   final void Function(Product? value) onChanged;
   final Product? initialValue;
 
-  /// Show the “Create 'query'…” affordance if nothing matches.
   final bool allowQuickCreate;
-
-  /// Field visuals
   final String label;
   final String? hintText;
   final bool readOnly;
   final bool allowClear;
   final InputDecoration? decoration;
-
-  /// Optional product types filter you want to pass to your API
   final List<String> types;
 
   const ProductSearchableDropdown({
@@ -147,16 +143,22 @@ class _ProductPickerSheetState extends State<_ProductPickerSheet> {
   String _lastQuery = '';
   List<Product> _results = const [];
 
-  // ---- Simple in-memory cache per types signature ----
+  // Cache per types signature
   static final Map<String, List<Product>> _cacheByTypes = {};
   String get _cacheKey => widget.types.join('|');
+
+  bool get _hasCache => _cacheByTypes.containsKey(_cacheKey);
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) => _focus.requestFocus());
     _queryCtrl.addListener(_onQueryChanged);
-    _initData();
+    // No initial fetch: user must type >= 3 chars first.
+    setState(() {
+      _results = const [];
+      _lastQuery = '';
+    });
   }
 
   @override
@@ -167,32 +169,37 @@ class _ProductPickerSheetState extends State<_ProductPickerSheet> {
     super.dispose();
   }
 
-  Future<void> _initData() async {
-    // If cached, use it; otherwise fetch once.
-    final cached = _cacheByTypes[_cacheKey];
-    if (cached != null) {
-      setState(() {
-        _results = cached;
-        _lastQuery = '';
-      });
-      return;
-    }
-    await _loadAllProducts();
+  // First time: need >= 3 chars to fetch; thereafter filter locally.
+  void _onQueryChanged() {
+    _debounce?.cancel();
+    _debounce = Timer(const Duration(milliseconds: 220), () async {
+      final q = _queryCtrl.text.trim();
+      _lastQuery = q;
+
+      if (!_hasCache) {
+        // Initial search: require 3 chars to hit API
+        if (q.length < 3) {
+          setState(() => _results = const []);
+          return;
+        }
+        await _fetchAllOnce(); // one-shot load
+        _applyLocalFilter(q);
+        return;
+      }
+
+      // After cache exists → purely local filter (any length)
+      _applyLocalFilter(q);
+    });
   }
 
-  Future<void> _loadAllProducts() async {
-    setState(() {
-      _loading = true;
-      _lastQuery = '';
-      _results = const [];
-    });
-
+  Future<void> _fetchAllOnce() async {
+    if (_hasCache) return; // already loaded
+    setState(() => _loading = true);
     try {
       final svc = ProductService();
       dynamic raw = await svc.getAll(widget.types);
 
       List<Product> all = const [];
-
       if (raw is List<Product>) {
         all = raw;
       } else if (raw is List) {
@@ -212,42 +219,36 @@ class _ProductPickerSheetState extends State<_ProductPickerSheet> {
         }
         all = list;
       }
-
       _cacheByTypes[_cacheKey] = all;
-      setState(() => _results = all);
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Load products failed: $e')));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Load products failed: $e')),
+        );
       }
     } finally {
       if (mounted) setState(() => _loading = false);
     }
   }
 
-  void _onQueryChanged() {
-    _debounce?.cancel();
-    _debounce = Timer(const Duration(milliseconds: 200), () {
-      final q = _queryCtrl.text.trim();
-      _lastQuery = q;
-
-      final all = _cacheByTypes[_cacheKey] ?? const <Product>[];
-      if (q.isEmpty) {
-        setState(() => _results = all);
-        return;
-      }
-      final needle = q.toLowerCase();
-      setState(() {
-        _results = all.where((p) {
-          final code = p.code.toLowerCase();
-          final desc = p.description.toLowerCase();
-          return code.contains(needle) || desc.contains(needle);
-        }).toList();
-      });
+  void _applyLocalFilter(String q) {
+    final all = _cacheByTypes[_cacheKey] ?? const <Product>[];
+    if (q.isEmpty) {
+      setState(() => _results = all);
+      return;
+    }
+    final needle = q.toLowerCase();
+    setState(() {
+      _results = all.where((p) {
+        final code = p.code.toLowerCase();
+        final desc = p.description.toLowerCase();
+        return code.contains(needle) || desc.contains(needle);
+      }).toList();
     });
   }
 
   bool get _canOfferCreate {
+    if (!_hasCache) return false; // only after first fetch
     if (!widget.allowQuickCreate) return false;
     final q = _lastQuery.trim();
     if (q.isEmpty) return false;
@@ -261,6 +262,7 @@ class _ProductPickerSheetState extends State<_ProductPickerSheet> {
   @override
   Widget build(BuildContext context) {
     final inset = MediaQuery.of(context).viewInsets.bottom;
+    final need3Chars = !_hasCache && _lastQuery.length < 3;
 
     return AnimatedPadding(
       duration: const Duration(milliseconds: 150),
@@ -298,6 +300,9 @@ class _ProductPickerSheetState extends State<_ProductPickerSheet> {
                         },
                         decoration: InputDecoration(
                           labelText: 'Search product',
+                          hintText: !_hasCache
+                              ? 'Type at least 3 characters to search'
+                              : 'Search products',
                           prefixIcon: const Icon(Icons.search),
                           border: const OutlineInputBorder(),
                           suffixIcon: Row(
@@ -307,13 +312,26 @@ class _ProductPickerSheetState extends State<_ProductPickerSheet> {
                                 IconButton(
                                   icon: const Icon(Icons.clear),
                                   onPressed: () {
-                                    _queryCtrl.clear(); // listener resets to all
+                                    _queryCtrl.clear(); // listener re-filters
                                   },
                                 ),
                               IconButton(
-                                tooltip: 'Refresh from server',
+                                tooltip: 'Refresh from server (resets cache)',
                                 icon: const Icon(Icons.refresh),
-                                onPressed: _loading ? null : _loadAllProducts,
+                                onPressed: _loading
+                                    ? null
+                                    : () async {
+                                  // Clear cache and require 3 chars again
+                                  _cacheByTypes.remove(_cacheKey);
+                                  setState(() {
+                                    _results = const [];
+                                    _lastQuery = _queryCtrl.text.trim();
+                                  });
+                                  if (_lastQuery.length >= 3) {
+                                    await _fetchAllOnce();
+                                    _applyLocalFilter(_lastQuery);
+                                  }
+                                },
                               ),
                             ],
                           ),
@@ -327,7 +345,9 @@ class _ProductPickerSheetState extends State<_ProductPickerSheet> {
               if (_loading) const LinearProgressIndicator(minHeight: 2),
 
               Expanded(
-                child: _results.isEmpty
+                child: need3Chars
+                    ? _Type3CharsNotice(count: _lastQuery.length)
+                    : _results.isEmpty
                     ? _EmptyState(
                   query: _lastQuery,
                   onCreate: _canOfferCreate ? _createFromQuery : null,
@@ -343,9 +363,11 @@ class _ProductPickerSheetState extends State<_ProductPickerSheet> {
                         onTap: () => _createFromQuery(_lastQuery),
                       );
                     }
-                    final opt = _results[i - (_canOfferCreate ? 1 : 0)];
+                    final opt =
+                    _results[i - (_canOfferCreate ? 1 : 0)];
                     return ListTile(
-                      leading: const Icon(Icons.inventory_2_outlined),
+                      leading:
+                      const Icon(Icons.inventory_2_outlined),
                       title: Text(opt.description),
                       subtitle: Text(opt.code),
                       onTap: () => Navigator.pop(context, opt),
@@ -373,7 +395,7 @@ class _ProductPickerSheetState extends State<_ProductPickerSheet> {
     try {
       final created = await ProductService().post(payload);
 
-      // If Product returned, add to cache for this types-set
+      // If a Product returned, add to cache for this types-set (top)
       if (created is Product) {
         final all = List<Product>.from(_cacheByTypes[_cacheKey] ?? const []);
         all.insert(0, created);
@@ -392,6 +414,31 @@ class _ProductPickerSheetState extends State<_ProductPickerSheet> {
 }
 
 /* ====================== Small UI helpers ====================== */
+
+class _Type3CharsNotice extends StatelessWidget {
+  final int count;
+  const _Type3CharsNotice({required this.count});
+
+  @override
+  Widget build(BuildContext context) {
+    final remain = (3 - count).clamp(0, 3);
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Text(
+          remain == 0
+              ? 'Searching…'
+              : 'Type at least 3 characters to search\n($remain more to go)',
+          textAlign: TextAlign.center,
+          style: Theme.of(context)
+              .textTheme
+              .bodyMedium
+              ?.copyWith(color: Colors.grey.shade700),
+        ),
+      ),
+    );
+  }
+}
 
 class _CreateTile extends StatelessWidget {
   final String query;

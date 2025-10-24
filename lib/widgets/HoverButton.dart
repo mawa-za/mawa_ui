@@ -45,7 +45,7 @@ class _HoverButtonState extends State<HoverButton> {
                 borderRadius: BorderRadius.circular(12),
               ),
               // backgroundColor: Colors.black,
-              // foregroundColor: Colors.yellow,
+              foregroundColor: Theme.of(context).colorScheme.surface,
               elevation: 0,
             ),
             onPressed: widget.onPressed,

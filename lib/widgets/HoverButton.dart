@@ -44,8 +44,8 @@ class _HoverButtonState extends State<HoverButton> {
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(12),
               ),
-              backgroundColor: Colors.black,
-              foregroundColor: Colors.yellow,
+              // backgroundColor: Colors.black,
+              // foregroundColor: Colors.yellow,
               elevation: 0,
             ),
             onPressed: widget.onPressed,

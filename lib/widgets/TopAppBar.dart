@@ -1,61 +1,65 @@
 // lib/widgets/mawa_top_app_bar.dart
-import 'dart:io' show Platform;
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart' show kIsWeb, defaultTargetPlatform;
 import 'package:flutter/material.dart';
-import 'package:mawa_api/mawa_api.dart';
 
-/// A reusable top app bar for Mawa Business Suite:
-/// - Shows title
-/// - Tenant badge (auto from MawaAPI if not provided)
-/// - User avatar + name (fallback friendly)
-/// - Popup menu: Profile, Settings, Switch Role, Logout
+/// Mawa Top App Bar (responsive, logo-aware, mobile-centerable)
 ///
-/// Usage:
+/// Example:
 /// Scaffold(
-///   appBar: MawaTopAppBar(
+///   appBar: TopAppBar(
 ///     title: 'Dashboard',
+///     logoAssetPath: 'assets/mawa/logo_mark.png',
+///     hideLogoBelowWidth: 600,             // auto-hide logo on narrow screens
+///     centerTitleOnMobile: true,           // center title on mobile widths
+///     centerTitleBreakpoint: 600,          // <=600px => centered
+///     onTapLogo: () => context.go('/'),
 ///     onTapProfile: () => context.go('/profile'),
 ///     onTapSettings: () => context.go('/settings'),
 ///     onTapSwitchRole: () => context.go('/select-role'),
-///     onLogout: () async {
-///       await User.logout();
-///       if (context.mounted) context.go('/login');
-///     },
+///     onLogout: () async { /* ... */ },
 ///   ),
 ///   body: ...
 /// )
 class TopAppBar extends StatefulWidget implements PreferredSizeWidget {
   final String title;
 
-  /// Optional pre-fetched user display & email. If null, the widget shows a safe fallback.
+  /// Optional user info for the right-side account menu.
   final String? userDisplayName;
   final String? userEmail;
 
-  /// Optional tenant host/name. If null, it tries MawaAPI.getTenant() and falls back to '-'.
-  final String? tenantLabel;
-
-  /// Optional trailing actions to inject before the user menu
+  /// Optional trailing actions to inject before the user menu.
   final List<Widget>? actions;
 
-  /// Show a back button instead of the menu icon (e.g., in detail screens)
+  /// Show a back button.
   final bool showBack;
 
-  /// Navigation callbacks
+  /// Callbacks.
   final VoidCallback? onTapProfile;
   final VoidCallback? onTapSettings;
   final VoidCallback? onTapSwitchRole;
   final Future<void> Function()? onLogout;
 
-  /// Optional background color / elevation override
+  /// Styling.
   final Color? backgroundColor;
   final double elevation;
+  final double? toolbarHeight;
+
+  /// Logo (leading) options.
+  final Widget? leadingLogo;         // If provided, used as-is.
+  final String? logoAssetPath;       // Used if leadingLogo is null.
+  final double logoHeight;           // Logical px height.
+  final double hideLogoBelowWidth;   // Auto-hide logo when screen < this width.
+  final VoidCallback? onTapLogo;
+
+  /// Title centering behavior for mobile widths.
+  final bool centerTitleOnMobile;
+  final double centerTitleBreakpoint; // <= this width => center
 
   const TopAppBar({
     super.key,
     required this.title,
     this.userDisplayName,
     this.userEmail,
-    this.tenantLabel,
     this.actions,
     this.showBack = false,
     this.onTapProfile,
@@ -64,6 +68,14 @@ class TopAppBar extends StatefulWidget implements PreferredSizeWidget {
     this.onLogout,
     this.backgroundColor,
     this.elevation = 0.5,
+    this.toolbarHeight,
+    this.leadingLogo,
+    this.logoAssetPath,
+    this.logoHeight = 24,
+    this.hideLogoBelowWidth = 600,
+    this.onTapLogo,
+    this.centerTitleOnMobile = true,
+    this.centerTitleBreakpoint = 600,
   });
 
   @override
@@ -74,77 +86,107 @@ class TopAppBar extends StatefulWidget implements PreferredSizeWidget {
 }
 
 class _TopAppBarState extends State<TopAppBar> {
-  String? _tenant;
-  String? _displayName;
+  late String _displayName;
   String? _email;
 
   @override
   void initState() {
     super.initState();
-    // _tenant = (widget.tenantLabel ?? _tryGetTenant()) as String?;
-    _displayName = widget.userDisplayName ?? 'User';
+    _displayName = (widget.userDisplayName?.trim().isNotEmpty ?? false)
+        ? widget.userDisplayName!.trim()
+        : 'User';
     _email = widget.userEmail;
     _hydrateUserSafe();
   }
 
-  Future<String> _tryGetTenant() async {
-    try {
-      // If your SDK exposes a getter; otherwise pass tenantLabel from main
-      final t = await MawaAPI.getTenant();
-      if (t is String && t.isNotEmpty) return t;
-    } catch (_) {}
-    return '-';
-  }
-
   Future<void> _hydrateUserSafe() async {
-    // If you have an endpoint for "me", hydrate here. Wrap in try/catch to avoid crashes.
-    // Example (adjust to your SDK):
+    // Optionally hydrate from your "me" endpoint.
     // try {
-    //   final me = await User.details(); // or User.me()
+    //   final me = await User.details();
     //   if (!mounted) return;
     //   setState(() {
-    //     _displayName = me.displayName ?? me.username ?? widget.userDisplayName ?? 'User';
-    //     _email = me.email ?? widget.userEmail;
+    //     _displayName = me.displayName ?? me.username ?? _displayName;
+    //     _email = me.email ?? _email;
     //   });
     // } catch (_) {}
   }
 
   @override
   Widget build(BuildContext context) {
-    final isMobile = !kIsWeb && (Theme.of(context).platform == TargetPlatform.android || Theme.of(context).platform == TargetPlatform.iOS);
-    final showTenant = _tenant != null && _tenant!.trim().isNotEmpty && _tenant != '-';
+    final width = MediaQuery.of(context).size.width;
+
+    // Title: fluid scaling with bounds
+    final titleFontSize = (width * 0.018).clamp(16.0, 22.0);
+
+    // Toolbar height: slightly taller on bigger screens
+    final computedToolbarHeight = widget.toolbarHeight ??
+        (width < 400
+            ? 56.0
+            : width < 800
+            ? 58.0
+            : width < 1200
+            ? 60.0
+            : 64.0);
+
+    // Center title on narrow screens if enabled
+    final centerTitle =
+        widget.centerTitleOnMobile && width <= widget.centerTitleBreakpoint;
+
+    final isMobileNative = !kIsWeb &&
+        (defaultTargetPlatform == TargetPlatform.android ||
+            defaultTargetPlatform == TargetPlatform.iOS);
+
     final cs = Theme.of(context).colorScheme;
-    return AppBar(
-      backgroundColor: widget.backgroundColor ?? Theme.of(context).colorScheme.surface,
-      elevation: widget.elevation,
-      centerTitle: false,
-      leading: widget.showBack
-          ? IconButton(
+
+    // Leading: back button has priority; else logo (if wide enough)
+    Widget? leading;
+    if (widget.showBack) {
+      leading = IconButton(
         icon: const Icon(Icons.arrow_back),
         onPressed: () => Navigator.of(context).maybePop(),
-      )
-          : null,
-      titleSpacing: widget.showBack ? 0 : null,
-      title: Row(
-        children: [
-          Flexible(
-            child: Text(
-              widget.title,
-              overflow: TextOverflow.ellipsis,
-              style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                fontWeight: FontWeight.w500,
-              ),
+      );
+    } else if (width >= widget.hideLogoBelowWidth) {
+      final logo = widget.leadingLogo ??
+          (widget.logoAssetPath != null
+              ? Image.asset(
+            widget.logoAssetPath!,
+            height: widget.logoHeight,
+            fit: BoxFit.contain,
+          )
+              : null);
+      if (logo != null) {
+        leading = Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 8),
+          child: InkWell(
+            borderRadius: BorderRadius.circular(8),
+            onTap: widget.onTapLogo,
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: logo,
             ),
           ),
-          const SizedBox(width: 10),
-          if (showTenant) _TenantBadge(label: _tenant!),
-        ],
+        );
+      }
+    }
+
+    return AppBar(
+      backgroundColor: widget.backgroundColor ?? cs.surface,
+      elevation: widget.elevation,
+      centerTitle: centerTitle,
+      toolbarHeight: computedToolbarHeight,
+      leading: leading,
+      titleSpacing: widget.showBack ? 0 : null,
+      title: Text(
+        widget.title,
+        overflow: TextOverflow.ellipsis,
+        style: Theme.of(context).textTheme.titleLarge?.copyWith(
+          fontWeight: FontWeight.w500,
+          fontSize: titleFontSize,
+        ),
       ),
       actions: [
         if (widget.actions != null) ...widget.actions!,
-        // Optional “scan tenant QR” action for non-web
-        if (!kIsWeb && (Platform.isAndroid || Platform.isIOS)) _ScanTenantAction(),
-        // Notifications placeholder
+        if (isMobileNative) const _ScanTenantAction(),
         IconButton(
           tooltip: 'Notifications',
           onPressed: () {},
@@ -152,9 +194,9 @@ class _TopAppBarState extends State<TopAppBar> {
         ),
         const SizedBox(width: 4),
         _UserMenu(
-          displayName: _displayName ?? 'User',
+          displayName: _displayName,
           email: _email,
-          compact: isMobile,
+          compact: width < 600,
           onTapProfile: widget.onTapProfile,
           onTapSettings: widget.onTapSettings,
           onTapSwitchRole: widget.onTapSwitchRole,
@@ -166,35 +208,9 @@ class _TopAppBarState extends State<TopAppBar> {
   }
 }
 
-// --- Tenant chip
-class _TenantBadge extends StatelessWidget {
-  final String label;
-  const _TenantBadge({required this.label});
+enum _MenuAction { profile, settings, switchRole, logout }
 
-  @override
-  Widget build(BuildContext context) {
-    return Tooltip(
-      message: 'Tenant',
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-        decoration: BoxDecoration(
-          color: Theme.of(context).colorScheme.primary.withOpacity(0.08),
-          borderRadius: BorderRadius.circular(18),
-          border: Border.all(color: Theme.of(context).dividerColor),
-        ),
-        child: Row(
-          children: [
-            const Icon(Icons.business_outlined, size: 16),
-            const SizedBox(width: 6),
-            Text(label, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-// --- User avatar + name + popup menu
+/// Right-side account menu (avatar, name, email) — fully responsive.
 class _UserMenu extends StatelessWidget {
   final String displayName;
   final String? email;
@@ -217,15 +233,51 @@ class _UserMenu extends StatelessWidget {
   String get initials {
     final parts = displayName.trim().split(RegExp(r'\s+'));
     if (parts.isEmpty) return 'U';
-    if (parts.length == 1) return parts.first.characters.take(2).toString().toUpperCase();
-    return (parts.first.characters.first + parts.last.characters.first).toUpperCase();
+    if (parts.length == 1) {
+      return parts.first.characters.take(2).toString().toUpperCase();
+    }
+    return (parts.first.characters.first + parts.last.characters.first)
+        .toUpperCase();
   }
 
   @override
   Widget build(BuildContext context) {
+    final width = MediaQuery.of(context).size.width;
+
+    // Responsive scaling
+    final nameFontSize = width < 400
+        ? 13.0
+        : width < 800
+        ? 14.0
+        : width < 1200
+        ? 15.0
+        : 16.0;
+
+    final emailFontSize = width < 400
+        ? 11.0
+        : width < 800
+        ? 12.0
+        : width < 1200
+        ? 13.0
+        : 14.0;
+
+    final avatarRadius = width < 400
+        ? 14.0
+        : width < 800
+        ? 16.0
+        : width < 1200
+        ? 18.0
+        : 20.0;
+
     final avatar = CircleAvatar(
-      radius: 16,
-      child: Text(initials, style: const TextStyle(fontWeight: FontWeight.bold)),
+      radius: avatarRadius,
+      child: Text(
+        initials,
+        style: TextStyle(
+          fontWeight: FontWeight.bold,
+          fontSize: avatarRadius * 0.7,
+        ),
+      ),
     );
 
     return PopupMenuButton<_MenuAction>(
@@ -247,10 +299,6 @@ class _UserMenu extends StatelessWidget {
             if (onLogout != null) {
               await onLogout!();
             } else {
-              // Fallback logout if not provided
-              try {
-                // await User.logout();
-              } catch (_) {}
               if (context.mounted) {
                 ScaffoldMessenger.of(context).showSnackBar(
                   const SnackBar(content: Text('Logged out')),
@@ -309,11 +357,20 @@ class _UserMenu extends StatelessWidget {
               Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(displayName, style: const TextStyle(fontWeight: FontWeight.w600)),
+                  Text(
+                    displayName,
+                    style: TextStyle(
+                      fontWeight: FontWeight.w600,
+                      fontSize: nameFontSize,
+                    ),
+                  ),
                   if (email != null && email!.isNotEmpty)
                     Text(
                       email!,
-                      style: TextStyle(fontSize: 12, color: Theme.of(context).textTheme.bodySmall?.color),
+                      style: TextStyle(
+                        fontSize: emailFontSize,
+                        color: Theme.of(context).textTheme.bodySmall?.color,
+                      ),
                     ),
                 ],
               ),
@@ -327,19 +384,17 @@ class _UserMenu extends StatelessWidget {
   }
 }
 
-enum _MenuAction { profile, settings, switchRole, logout }
-
-// --- Optional: a small action to scan/enter tenant URL on mobile
+/// Optional: a small action to scan/enter tenant URL on mobile (kept as utility)
 class _ScanTenantAction extends StatelessWidget {
+  const _ScanTenantAction();
+
   @override
   Widget build(BuildContext context) {
     return IconButton(
       tooltip: 'Scan / Enter Tenant URL',
       icon: const Icon(Icons.qr_code_scanner),
       onPressed: () async {
-        // You can open your tenant picker page/dialog here.
-        // Example:
-        // final ok = await showDialog(...);
+        // Open your tenant picker / scanner here if needed.
       },
     );
   }

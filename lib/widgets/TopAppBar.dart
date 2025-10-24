@@ -81,7 +81,7 @@ class _TopAppBarState extends State<TopAppBar> {
   @override
   void initState() {
     super.initState();
-    _tenant = (widget.tenantLabel ?? _tryGetTenant()) as String?;
+    // _tenant = (widget.tenantLabel ?? _tryGetTenant()) as String?;
     _displayName = widget.userDisplayName ?? 'User';
     _email = widget.userEmail;
     _hydrateUserSafe();

@@ -81,16 +81,16 @@ class _TopAppBarState extends State<TopAppBar> {
   @override
   void initState() {
     super.initState();
-    _tenant = widget.tenantLabel ?? _tryGetTenant();
+    _tenant = (widget.tenantLabel ?? _tryGetTenant()) as String?;
     _displayName = widget.userDisplayName ?? 'User';
     _email = widget.userEmail;
     _hydrateUserSafe();
   }
 
-  String _tryGetTenant() {
+  Future<String> _tryGetTenant() async {
     try {
       // If your SDK exposes a getter; otherwise pass tenantLabel from main
-      final t = MawaAPI.getTenant();
+      final t = await MawaAPI.getTenant();
       if (t is String && t.isNotEmpty) return t;
     } catch (_) {}
     return '-';

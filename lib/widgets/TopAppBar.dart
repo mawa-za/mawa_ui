@@ -3,57 +3,41 @@ import 'package:flutter/foundation.dart' show kIsWeb, defaultTargetPlatform;
 import 'package:flutter/material.dart';
 
 /// Mawa Top App Bar (responsive, logo-aware, mobile-centerable)
-///
-/// Example:
-/// Scaffold(
-///   appBar: TopAppBar(
-///     title: 'Dashboard',
-///     logoAssetPath: 'assets/mawa/logo_mark.png',
-///     hideLogoBelowWidth: 600,             // auto-hide logo on narrow screens
-///     centerTitleOnMobile: true,           // center title on mobile widths
-///     centerTitleBreakpoint: 600,          // <=600px => centered
-///     onTapLogo: () => context.go('/'),
-///     onTapProfile: () => context.go('/profile'),
-///     onTapSettings: () => context.go('/settings'),
-///     onTapSwitchRole: () => context.go('/select-role'),
-///     onLogout: () async { /* ... */ },
-///   ),
-///   body: ...
-/// )
 class TopAppBar extends StatefulWidget implements PreferredSizeWidget {
   final String title;
 
-  /// Optional user info for the right-side account menu.
+  // Account
   final String? userDisplayName;
   final String? userEmail;
 
-  /// Optional trailing actions to inject before the user menu.
+  // Trailing actions (before user menu)
   final List<Widget>? actions;
 
-  /// Show a back button.
+  // Navigation
   final bool showBack;
+  final bool showMenuButton; // NEW: show hamburger if Scaffold has a drawer
 
-  /// Callbacks.
+  // Callbacks
   final VoidCallback? onTapProfile;
   final VoidCallback? onTapSettings;
   final VoidCallback? onTapSwitchRole;
   final Future<void> Function()? onLogout;
 
-  /// Styling.
+  // Styling
   final Color? backgroundColor;
   final double elevation;
   final double? toolbarHeight;
 
-  /// Logo (leading) options.
-  final Widget? leadingLogo;         // If provided, used as-is.
-  final String? logoAssetPath;       // Used if leadingLogo is null.
-  final double logoHeight;           // Logical px height.
-  final double hideLogoBelowWidth;   // Auto-hide logo when screen < this width.
+  // Logo (leading)
+  final Widget? leadingLogo;
+  final String? logoAssetPath;
+  final double logoHeight;
+  final double hideLogoBelowWidth;
   final VoidCallback? onTapLogo;
 
-  /// Title centering behavior for mobile widths.
+  // Centering
   final bool centerTitleOnMobile;
-  final double centerTitleBreakpoint; // <= this width => center
+  final double centerTitleBreakpoint;
 
   const TopAppBar({
     super.key,
@@ -62,6 +46,7 @@ class TopAppBar extends StatefulWidget implements PreferredSizeWidget {
     this.userEmail,
     this.actions,
     this.showBack = false,
+    this.showMenuButton = true, // NEW
     this.onTapProfile,
     this.onTapSettings,
     this.onTapSwitchRole,
@@ -101,14 +86,6 @@ class _TopAppBarState extends State<TopAppBar> {
 
   Future<void> _hydrateUserSafe() async {
     // Optionally hydrate from your "me" endpoint.
-    // try {
-    //   final me = await User.details();
-    //   if (!mounted) return;
-    //   setState(() {
-    //     _displayName = me.displayName ?? me.username ?? _displayName;
-    //     _email = me.email ?? _email;
-    //   });
-    // } catch (_) {}
   }
 
   @override
@@ -138,35 +115,54 @@ class _TopAppBarState extends State<TopAppBar> {
 
     final cs = Theme.of(context).colorScheme;
 
-    // Leading: back button has priority; else logo (if wide enough)
+    // Leading logic:
+    // 1) Back button (highest priority)
+    // 2) Menu button if Scaffold has a drawer and showMenuButton = true
+    // 3) Logo (when width allows)
     Widget? leading;
+
     if (widget.showBack) {
       leading = IconButton(
         icon: const Icon(Icons.arrow_back),
         onPressed: () => Navigator.of(context).maybePop(),
       );
-    } else if (width >= widget.hideLogoBelowWidth) {
-      final logo = widget.leadingLogo ??
-          (widget.logoAssetPath != null
-              ? Image.asset(
-            widget.logoAssetPath!,
-            height: widget.logoHeight,
-            fit: BoxFit.contain,
-          )
-              : null);
-      if (logo != null) {
-        leading = Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 8),
-          child: InkWell(
-            borderRadius: BorderRadius.circular(8),
-            onTap: widget.onTapLogo,
-            child: Align(
-              alignment: Alignment.centerLeft,
-              child: logo,
-            ),
-          ),
-        );
-      }
+    } else {
+      // Need a Builder to access Scaffold in AppBar
+      leading = Builder(
+        builder: (ctx) {
+          final hasDrawer = Scaffold.maybeOf(ctx)?.hasDrawer ?? false;
+          if (widget.showMenuButton && hasDrawer) {
+            return IconButton(
+              tooltip: 'Menu',
+              icon: const Icon(Icons.menu),
+              onPressed: () => Scaffold.maybeOf(ctx)?.openDrawer(),
+            );
+          }
+
+          // Fallback to logo if wide enough
+          if (width >= widget.hideLogoBelowWidth) {
+            final logo = widget.leadingLogo ??
+                (widget.logoAssetPath != null
+                    ? Image.asset(
+                  widget.logoAssetPath!,
+                  height: widget.logoHeight,
+                  fit: BoxFit.contain,
+                )
+                    : null);
+            if (logo != null) {
+              return Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(8),
+                  onTap: widget.onTapLogo,
+                  child: Align(alignment: Alignment.centerLeft, child: logo),
+                ),
+              );
+            }
+          }
+          return const SizedBox.shrink();
+        },
+      );
     }
 
     return AppBar(
@@ -210,7 +206,6 @@ class _TopAppBarState extends State<TopAppBar> {
 
 enum _MenuAction { profile, settings, switchRole, logout }
 
-/// Right-side account menu (avatar, name, email) — fully responsive.
 class _UserMenu extends StatelessWidget {
   final String displayName;
   final String? email;
@@ -244,7 +239,6 @@ class _UserMenu extends StatelessWidget {
   Widget build(BuildContext context) {
     final width = MediaQuery.of(context).size.width;
 
-    // Responsive scaling
     final nameFontSize = width < 400
         ? 13.0
         : width < 800
@@ -384,7 +378,6 @@ class _UserMenu extends StatelessWidget {
   }
 }
 
-/// Optional: a small action to scan/enter tenant URL on mobile (kept as utility)
 class _ScanTenantAction extends StatelessWidget {
   const _ScanTenantAction();
 

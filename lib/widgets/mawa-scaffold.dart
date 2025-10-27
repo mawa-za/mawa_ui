@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:mawa_api/mawa_api.dart';
 
 /// MawaCustomScaffold
 /// A production-ready, responsive scaffold that adapts navigation
@@ -101,6 +102,12 @@ class _MawaScaffoldState extends State<MawaScaffold> {
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
 
   bool get _hasDestinations => widget.destinations.isNotEmpty;
+
+  @override
+  void initState() {
+    super.initState();
+  }
+
 
   @override
   Widget build(BuildContext context) {
@@ -305,16 +312,7 @@ class _MawaScaffoldState extends State<MawaScaffold> {
 }
 
 /// A simple destination model to keep nav consistent across Drawer/Rail/BottomBar.
-class MawaDestination {
-  final IconData icon;
-  final IconData? selectedIcon;
-  final String label;
-  const MawaDestination({
-    required this.icon,
-    required this.label,
-    this.selectedIcon,
-  });
-}
+
 
 // --------------------------- Example Usage ---------------------------
 // Copy the widget above into your project (e.g., lib/widgets/mawa_custom_scaffold.dart),

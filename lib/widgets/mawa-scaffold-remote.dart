@@ -124,7 +124,7 @@ class _MawaScaffoldRemoteState extends State<MawaScaffoldRemote> {
         throw Exception('Role not found in SharedPreferences under key "${widget.roleKey}"');
       }
 
-      final json = await UserService().getWorkcenters(role);
+      final json = await UserService().getWorkcenters('SYSTEM-ADMINISTRATOR');
       _destinations = _decodeWorkcenters(json);
 
       setState(() => _loading = false);

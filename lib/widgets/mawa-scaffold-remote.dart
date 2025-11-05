@@ -5,7 +5,6 @@ import 'package:mawa_api/mawa_api.dart';
 import '../services/navigation_service.dart';
 import 'mawa-scaffold.dart';
 
-
 /// Returns icon pairs for common workcenters.
 (IconData, IconData?) _iconFor(String id) {
   switch (id) {
@@ -18,38 +17,63 @@ import 'mawa-scaffold.dart';
   }
 }
 
-/// Converts your API payload → List<MawaDestination>
-List<MawaDestination> _decodeWorkcenters(dynamic json) {
-  if (json is! List) return const <MawaDestination>[];
-
-  final items = json
-      .whereType<Map<String, dynamic>>()
-      .map((e) {
-    final wc = (e['workcenter'] ?? {}) as Map<String, dynamic>;
-    final id = (wc['id'] ?? '').toString();
-    final label = (wc['description'] ?? id).toString();
-    final path = (wc['path'] ?? id).toString();
-    final pos = e['position'];
-    final position = (pos is int) ? pos : int.tryParse(pos?.toString() ?? '');
-    final (icon, selectedIcon) = _iconFor(id);
-
-    return (
-    position: position ?? 9999,
-    dest: MawaDestination(
-      icon: icon,
-      selectedIcon: selectedIcon,
-      label: label,
-      route: path,
-    )
-    );
-  })
-      .toList();
-
-  items.sort((a, b) => a.position.compareTo(b.position));
-  return items.map((x) => x.dest).toList(growable: false);
+/// Shorten labels to avoid overflow; keep original for tooltips.
+String _trimLabel(String input, {int maxChars = 14}) {
+  final s = input.trim();
+  if (s.length <= maxChars) return s;
+  return s.substring(0, maxChars - 1) + '…';
 }
 
-/// Scaffold that auto-fetches destinations from API and navigates via NavigationService
+/// Strongly-typed decoded destination with both short and full labels.
+class _DecodedDest {
+  final MawaDestination dest;
+  final String fullLabel;
+  final int sortPos;
+  _DecodedDest(this.dest, this.fullLabel, this.sortPos);
+}
+
+/// Converts your API payload → sorted List<_DecodedDest>
+List<_DecodedDest> _decodeWorkcenters(dynamic json) {
+  if (json is! List) return const <_DecodedDest>[];
+
+  final items = <_DecodedDest>[];
+
+  for (final e in json.whereType<Map<String, dynamic>>()) {
+    final wc = (e['workcenter'] ?? {}) as Map<String, dynamic>;
+    final id = (wc['id'] ?? '').toString();
+    final fullLabel = (wc['description'] ?? id).toString();
+    final path = (wc['path'] ?? id).toString();
+    final posRaw = e['position'];
+    final sortPos = (posRaw is int) ? posRaw : int.tryParse('${posRaw ?? ''}') ?? 9999;
+
+    if (id.isEmpty) continue; // ignore invalid entry
+
+    final (icon, selectedIcon) = _iconFor(id);
+    final dest = MawaDestination(
+      icon: icon,
+      selectedIcon: selectedIcon,
+      label: _trimLabel(fullLabel),
+      route: path,
+      tooltip: fullLabel, // if your MawaDestination supports it
+    );
+
+    items.add(_DecodedDest(dest, fullLabel, sortPos));
+  }
+
+  items.sort((a, b) => a.sortPos.compareTo(b.sortPos));
+  return List.unmodifiable(items);
+}
+
+/// Strategy for handling many destinations on mobile.
+enum _OverflowStrategy {
+  /// Use a Drawer/NavigationRail instead of a BottomNavigationBar if > maxBottomItems.
+  switchToRailOrDrawer,
+
+  /// Keep a BottomNavigationBar but show first (maxBottomItems-1) items + a "More" slot.
+  bottomBarWithMoreItem,
+}
+
+/// Scaffold that auto-fetches destinations from API and navigates via NavigationService.
 class MawaScaffoldRemote extends StatefulWidget {
   const MawaScaffoldRemote({
     super.key,
@@ -73,6 +97,10 @@ class MawaScaffoldRemote extends StatefulWidget {
     this.resizeToAvoidBottomInset,
     this.customAppBar,
     this.roleKey = 'role',
+
+    /// Enhancements
+    this.maxBottomItems = 5,
+    this.mobileOverflowStrategy = _OverflowStrategy.switchToRailOrDrawer,
   });
 
   final String? title;
@@ -96,6 +124,12 @@ class MawaScaffoldRemote extends StatefulWidget {
   final PreferredSizeWidget? customAppBar;
   final String roleKey;
 
+  /// Max items shown in a bottom bar before overflow handling kicks in.
+  final int maxBottomItems;
+
+  /// How to handle more than [maxBottomItems] destinations on mobile.
+  final _OverflowStrategy mobileOverflowStrategy;
+
   @override
   State<MawaScaffoldRemote> createState() => _MawaScaffoldRemoteState();
 }
@@ -103,7 +137,10 @@ class MawaScaffoldRemote extends StatefulWidget {
 class _MawaScaffoldRemoteState extends State<MawaScaffoldRemote> {
   bool _loading = true;
   Object? _error;
-  List<MawaDestination> _destinations = const [];
+  List<_DecodedDest> _decoded = const [];
+
+  List<MawaDestination> get _destinations =>
+      _decoded.map((e) => e.dest).toList(growable: false);
 
   @override
   void initState() {
@@ -121,11 +158,11 @@ class _MawaScaffoldRemoteState extends State<MawaScaffoldRemote> {
       final prefs = await SharedPreferences.getInstance();
       final role = prefs.getString(widget.roleKey);
       if (role == null || role.isEmpty) {
-        throw Exception('Role not found in SharedPreferences under key "${widget.roleKey}"');
+        throw Exception('Role not found in SharedPreferences under key "${widget.roleKey}".');
       }
 
       final json = await UserService().getWorkcenters(role);
-      _destinations = _decodeWorkcenters(json);
+      _decoded = _decodeWorkcenters(json);
 
       setState(() => _loading = false);
     } catch (e) {
@@ -136,23 +173,104 @@ class _MawaScaffoldRemoteState extends State<MawaScaffoldRemote> {
     }
   }
 
-  void _onDestinationSelected(int index) {
+  void _navigate(String route) {
+    if (route.isEmpty) return;
+    NavigationService.navigateTo(route);
+  }
+
+  /// Whether we should render a bottom bar on mobile (and it won’t overflow).
+  bool _useBottomBarOnMobile(BuildContext context) {
+    if (!widget.bottomBarOnMobile) return false;
+    final count = _destinations.length;
+    if (count <= widget.maxBottomItems) return true;
+
+    // If we’re using "More", we’ll still use a bottom bar.
+    return widget.mobileOverflowStrategy == _OverflowStrategy.bottomBarWithMoreItem;
+  }
+
+  /// Produce a destination list for bottom bar when using the "More" bucket.
+  /// Shows (maxBottomItems - 1) real items + a synthetic "More" item.
+  List<MawaDestination> _destinationsWithMore() {
+    final maxReal = (widget.maxBottomItems - 1).clamp(1, widget.maxBottomItems);
+    final primary = _destinations.take(maxReal).toList();
+    final more = MawaDestination(
+      icon: Icons.more_horiz,
+      selectedIcon: Icons.more_horiz,
+      label: 'More',
+      route: '', // handled specially
+      tooltip: 'More',
+    );
+    return [...primary, more];
+  }
+
+  void _handleSelectWithMore(int index) {
+    final maxReal = (widget.maxBottomItems - 1).clamp(1, widget.maxBottomItems);
+    // If "More" pressed
+    if (index == maxReal) {
+      _showMoreSheet();
+      return;
+    }
+    // Navigate to real slot
     final route = _destinations[index].route;
-    NavigationService.navigateTo(route); // <── integrated navigation
+    _navigate(route);
+  }
+
+  void _showMoreSheet() {
+    final overflow = _destinations.skip(widget.maxBottomItems - 1).toList();
+    if (overflow.isEmpty) return;
+
+    showModalBottomSheet(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) {
+        return SafeArea(
+          child: ListView.separated(
+            padding: const EdgeInsets.symmetric(vertical: 8),
+            itemCount: overflow.length,
+            separatorBuilder: (_, __) => const Divider(height: 1),
+            itemBuilder: (context, i) {
+              final d = overflow[i];
+              return ListTile(
+                leading: Icon(d.icon),
+                title: Text(d.tooltip ?? d.label),
+                onTap: () {
+                  Navigator.of(context).pop();
+                  _navigate(d.route);
+                },
+              );
+            },
+          ),
+        );
+      },
+    );
+  }
+
+  void _onDestinationSelected(int index) {
+    final useMore =
+        widget.mobileOverflowStrategy == _OverflowStrategy.bottomBarWithMoreItem &&
+            _destinations.length > widget.maxBottomItems;
+
+    if (useMore) {
+      _handleSelectWithMore(index);
+      return;
+    }
+
+    final route = _destinations[index].route;
+    _navigate(route);
   }
 
   @override
   Widget build(BuildContext context) {
     if (_loading) {
       return Scaffold(
-        appBar: AppBar(title: Text(widget.title ?? '')),
+        appBar: widget.customAppBar ?? AppBar(title: Text(widget.title ?? '')),
         body: const Center(child: CircularProgressIndicator()),
       );
     }
 
     if (_error != null) {
       return Scaffold(
-        appBar: AppBar(title: Text(widget.title ?? '')),
+        appBar: widget.customAppBar ?? AppBar(title: Text(widget.title ?? '')),
         body: Center(
           child: Padding(
             padding: const EdgeInsets.all(24.0),
@@ -164,7 +282,7 @@ class _MawaScaffoldRemoteState extends State<MawaScaffoldRemote> {
                 Text('Failed to load destinations',
                     style: Theme.of(context).textTheme.titleMedium),
                 const SizedBox(height: 8),
-                Text(_error.toString(), textAlign: TextAlign.center),
+                Text('$_error', textAlign: TextAlign.center),
                 const SizedBox(height: 16),
                 FilledButton.icon(
                   onPressed: _load,
@@ -178,12 +296,19 @@ class _MawaScaffoldRemoteState extends State<MawaScaffoldRemote> {
       );
     }
 
-    if (_destinations.isEmpty) {
+    if (_decoded.isEmpty) {
       return Scaffold(
-        appBar: AppBar(title: Text(widget.title ?? '')),
+        appBar: widget.customAppBar ?? AppBar(title: Text(widget.title ?? '')),
         body: const Center(child: Text('No destinations found')),
       );
     }
+
+    final useBottomBar = _useBottomBarOnMobile(context);
+    final useMore = useBottomBar &&
+        widget.mobileOverflowStrategy == _OverflowStrategy.bottomBarWithMoreItem &&
+        _destinations.length > widget.maxBottomItems;
+
+    final effectiveDestinations = useMore ? _destinationsWithMore() : _destinations;
 
     return MawaScaffold(
       title: widget.title,
@@ -192,9 +317,12 @@ class _MawaScaffoldRemoteState extends State<MawaScaffoldRemote> {
       actions: widget.actions,
       leading: widget.leading,
       onTapLeading: widget.onTapLeading,
-      destinations: _destinations,
+
+      // Key: avoid overflow and provide "More" when needed
+      destinations: effectiveDestinations,
       onDestinationSelected: _onDestinationSelected,
-      bottomBarOnMobile: widget.bottomBarOnMobile,
+      bottomBarOnMobile: useBottomBar,
+
       extendRailOnDesktop: widget.extendRailOnDesktop,
       drawerHeader: widget.drawerHeader,
       headerBuilder: widget.headerBuilder,

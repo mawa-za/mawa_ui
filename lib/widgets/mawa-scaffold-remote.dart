@@ -139,6 +139,10 @@ class _MawaScaffoldRemoteState extends State<MawaScaffoldRemote> {
   Object? _error;
   List<_DecodedDest> _decoded = const [];
 
+  /// Track current selected index so we can avoid opening menus
+  /// on the very first programmatic selection.
+  int? _currentIndex;
+
   List<MawaDestination> get _destinations =>
       _decoded.map((e) => e.dest).toList(growable: false);
 
@@ -203,18 +207,6 @@ class _MawaScaffoldRemoteState extends State<MawaScaffoldRemote> {
     return [...primary, more];
   }
 
-  void _handleSelectWithMore(int index) {
-    final maxReal = (widget.maxBottomItems - 1).clamp(1, widget.maxBottomItems);
-    // If "More" pressed
-    if (index == maxReal) {
-      _showMoreSheet();
-      return;
-    }
-    // Navigate to real slot
-    final route = _destinations[index].route;
-    _navigate(route);
-  }
-
   void _showMoreSheet() {
     final overflow = _destinations.skip(widget.maxBottomItems - 1).toList();
     if (overflow.isEmpty) return;
@@ -250,11 +242,27 @@ class _MawaScaffoldRemoteState extends State<MawaScaffoldRemote> {
         widget.mobileOverflowStrategy == _OverflowStrategy.bottomBarWithMoreItem &&
             _destinations.length > widget.maxBottomItems;
 
-    if (useMore) {
-      _handleSelectWithMore(index);
+    // Treat the very first index reported as an initial "sync" from
+    // the scaffold/router – do NOT open menus or navigate on it.
+    if (_currentIndex == null) {
+      _currentIndex = index;
       return;
     }
 
+    _currentIndex = index;
+
+    if (useMore) {
+      final maxReal = (widget.maxBottomItems - 1).clamp(1, widget.maxBottomItems);
+
+      // If the "More" item is clicked, open the overflow menu.
+      // This is the ONLY place where the enhancement menu is opened.
+      if (index == maxReal) {
+        _showMoreSheet();
+        return;
+      }
+    }
+
+    // Normal navigation for real destinations
     final route = _destinations[index].route;
     _navigate(route);
   }
@@ -279,8 +287,10 @@ class _MawaScaffoldRemoteState extends State<MawaScaffoldRemote> {
               children: [
                 const Icon(Icons.error_outline, size: 48),
                 const SizedBox(height: 12),
-                Text('Failed to load destinations',
-                    style: Theme.of(context).textTheme.titleMedium),
+                Text(
+                  'Failed to load destinations',
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
                 const SizedBox(height: 8),
                 Text('$_error', textAlign: TextAlign.center),
                 const SizedBox(height: 16),
@@ -308,7 +318,8 @@ class _MawaScaffoldRemoteState extends State<MawaScaffoldRemote> {
         widget.mobileOverflowStrategy == _OverflowStrategy.bottomBarWithMoreItem &&
         _destinations.length > widget.maxBottomItems;
 
-    final effectiveDestinations = useMore ? _destinationsWithMore() : _destinations;
+    final effectiveDestinations =
+    useMore ? _destinationsWithMore() : _destinations;
 
     return MawaScaffold(
       title: widget.title,

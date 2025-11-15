@@ -42,7 +42,7 @@ List<_DecodedDest> _decodeWorkcenters(dynamic json) {
     final wc = (e['workcenter'] ?? {}) as Map<String, dynamic>;
     final id = (wc['id'] ?? '').toString();
     final fullLabel = (wc['description'] ?? id).toString();
-    final path = (wc['path'] ?? id).toString();
+    final path = (wc['id'] ?? id).toString();
     final posRaw = e['position'];
     final sortPos = (posRaw is int) ? posRaw : int.tryParse('${posRaw ?? ''}') ?? 9999;
 
